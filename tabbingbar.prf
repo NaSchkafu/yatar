@@ -1,0 +1,171 @@
+$H H:\Devel\XProfanX2\Include\shellapi.ph
+$H H:\Devel\XProfanX2\Include\Structs.ph
+$H H:\Devel\XProfanX2\Include\messages.ph
+$H H:\Devel\XProfanX2\Include\windows.ph
+
+$I Memory.Inc
+
+Def &CB_MSG_ID (~WM_USER + 1)
+Def &HEAP_ZERO_MEMORY 0x8
+Def &NULL 0x0
+Def &UPDATE_INTERVAL $1200
+Def &BUTTON_STYLE $5401A000
+
+Struct TAPPBARDATA = ~APPBARDATA
+Struct TWINDOWINFO = hWnd%%, title$(256), pos%
+
+' Global variables
+Declare windows%%[], windowsSize% ' Array of relevant handles
+Declare windowInfos# ' Currently tabable windows
+Declare tabs%%[], tabsSize% ' Handles of tab buttons
+Var currWInfo# = New(TWINDOWINFO) ' Pointer to a (temporary) working instance of TWINDOWINFO
+Var currWInfoAddr%% = currWInfo#
+
+windowInfos# = New(Vector, 10, SizeOf(TWINDOWINFO))
+
+' Some init stuff
+Proc InitApp
+	UseFont "MS Sans Serif",13,0,0,0,0
+	SetDialogFont 1	
+EndProc
+
+' Create main window and register as appbar
+Proc CreateAppBar
+  Declare left&, top&, right&, bottom&
+  left& = 0
+  top& = 0
+  right& = %maxx
+  bottom& = 32
+
+  Declare appData#, result%
+  WindowStyle $458
+  Window 0,0 - 0,0
+  Dim appData#, TAPPBARDATA
+  appData#.cbSize& = SizeOf(appData#)
+  appData#.hWnd& = %hwnd
+  appData#.uCallbackMessage& = &CB_MSG_ID
+  result% = ~SHAppBarMessage(~ABM_NEW, appData#)
+  If result% = 0
+    MessageBox("Could not register window as appbar.", "Appbar register failed", ~MB_ICONSTOP)
+    Dispose appData#
+    End 1
+  EndIf
+  ' Query position
+  Long appData#,16 = left& 'left
+  Long appData#,20 = top& 'top
+  Long appData#,24 = right& 'right
+  Long appData#,28 = bottom& 'bottom
+  appData#.uEdge& = ~ABE_TOP
+  ~SHAppBarMessage(~ABM_QUERYPOS, appData#)
+  ~SHAppBarMessage(~ABM_SETPOS, appData#)
+  left& = Long(appData#, 16)
+  top& = Long(appData#, 20)
+  right& = Long(appData#, 24)
+  bottom& = Long(appData#, 28)
+  Window left&, top& - right& - left&, bottom&
+  Cls 0
+  Dispose appData#
+EndProc
+
+' Determines whether a window is shown in the Alt+Tab Selection
+Proc IsTabbableWindow
+  Parameters hwnd%%
+  Declare style&, ret%
+  If ~IsWindowVisible(hwnd%%) <> 0
+    Declare hwndWalk%%, hwndTry%%
+    hwndWalk%% = ~GetAncestor(hwnd%%, ~GA_ROOTOWNER)
+
+    hwndTry%% = ~GetLastActivePopup(hwndWalk%%)
+    While hwndTry%% <> hwndWalk%%
+      style& = ~GetWindowLong(hwndTry%%, ~GWL_EXSTYLE)
+      Case (~IsWindowVisible(hwndTry%%) And Not(style& & ~WS_EX_TOOLWINDOW)) Or (style& & ~WS_EX_APPWINDOW): BREAK
+      hwndWalk%% = hwndTry%%
+      hwndTry%% = ~GetLastActivePopup(hwndWalk%%)
+    Wend
+
+    Return (hwndWalk%% = hwndTry%%) And Not(~GetWindowLong(hwnd%%, ~GWL_EXSTYLE) & ~WS_EX_TOOLWINDOW)
+ EndIf
+
+ Return 0
+EndProc
+
+' Callback for enum windows
+Proc EnumWindowsCb
+  Parameters  hwnd%%, lParam&
+  If IsTabbableWindow(hwnd%%) = 1
+    windows%%[windowsSize%] = hwnd%%
+    Inc windowsSize%
+  EndIf
+
+	Return 1
+EndProc
+
+Proc UpdateWindowInfo
+  Parameters hInfo%%, hwnd%%
+  Var w# = New(TWINDOWINFO)
+  Var hW%% = w#
+  w# = hInfo%%
+
+  w#.hwnd%% = hwnd%%
+  ~GetWindowText(hwnd%%, Addr(w#) + SizeOf(hwnd%%), 256)
+
+  w# = hW%%
+  Dispose w#
+EndProc
+
+' Updates the window list
+Proc updateWindowList
+  Var i% = 0
+
+  SetSize windows%%[], 0
+  windowsSize% = 0
+  ~EnumWindows(ProcAddr("EnumWindowsCb", 2), 0)
+  WhileLoop 0,windowsSize% - 1
+    UpdateWindowInfo(currWInfo#, Windows%%[&loop])
+    windowInfos#.Add(currWInfo#)
+  EndWhile
+EndProc
+
+Proc UpdateTabs
+	Case windowsSize% <= 0: return
+
+  Var width% = (%winright - %winleft) / windowsSize%
+  Var current# = New(TWINDOWINFO)
+  Var currAddr%% = current#
+
+  ' Remove old controls
+  WhileLoop 0, tabsSize% - 1
+    DestroyWindow(tabs%%[&loop])
+  EndWhile
+  tabsSize% = 0
+
+  ' Create new controls
+  WhileLoop  0, windowsSize% - 1
+    currWInfo# = windowInfos#.Get(&loop)
+    Tabs%%[&loop] = Create("BUTTON", %hWnd, currWInfo#.title$, Width%*&loop, 5, Width%, 25)
+		SetStyle Tabs%%[&loop],&BUTTON_STYLE
+  EndWhile
+
+  SetSize Tabs%%[], tabsSize%
+  currWInfo# = currWInfoAddr%% ' Restore pointer
+EndProc
+
+CreateAppBar
+InitApp
+updateWindowList
+UpdateTabs
+
+SetTimer &UPDATE_INTERVAL
+While %key <> $1B
+  Case %wmtimer = 1: updateWindowList
+	UpdateTabs
+	WaitInput
+Wend
+
+' Clear resources
+KillTimer
+windowInfos#.Free()
+Dispose windowInfos#
+currWInfo# = currWInfoAddr%%
+Dispose currWInfo#
+
