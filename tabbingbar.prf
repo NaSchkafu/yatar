@@ -15,9 +15,9 @@ Struct TAPPBARDATA = ~APPBARDATA
 Struct TWINDOWINFO = hWnd%%, title$(256), pos%
 
 ' Global variables
-Declare windows%%[], windowsSize% ' Array of relevant handles
+Declare windows%%[]' Array of relevant handles
 Declare windowInfos# ' Currently tabable windows
-Declare tabs%%[], tabsSize% ' Handles of tab buttons
+Declare tabs%%[] ' Handles of tab buttons
 Var currWInfo# = New(TWINDOWINFO) ' Pointer to a (temporary) working instance of TWINDOWINFO
 Var currWInfoAddr%% = currWInfo#
 
@@ -26,7 +26,11 @@ windowInfos# = New(Vector, 10, SizeOf(TWINDOWINFO))
 ' Some init stuff
 Proc InitApp
 	UseFont "MS Sans Serif",13,0,0,0,0
-	SetDialogFont 1	
+	SetDialogFont 1
+
+	~RegisterHotkey(0, 1, ~MOD_WIN, $4B)
+  MessageBox(WinError$(%winerror), "",0)
+	UserMessages ~WM_HOTKEY
 EndProc
 
 ' Create main window and register as appbar
@@ -93,8 +97,7 @@ EndProc
 Proc EnumWindowsCb
   Parameters  hwnd%%, lParam&
   If IsTabbableWindow(hwnd%%) = 1
-    windows%%[windowsSize%] = hwnd%%
-    Inc windowsSize%
+    windows%%[SizeOf(windows%%[])] = hwnd%%
   EndIf
 
 	Return 1
@@ -118,35 +121,33 @@ Proc updateWindowList
   Var i% = 0
 
   SetSize windows%%[], 0
-  windowsSize% = 0
   ~EnumWindows(ProcAddr("EnumWindowsCb", 2), 0)
-  WhileLoop 0,windowsSize% - 1
+  WhileLoop 0,SizeOf(windows%%[])-1
     UpdateWindowInfo(currWInfo#, Windows%%[&loop])
     windowInfos#.Add(currWInfo#)
   EndWhile
 EndProc
 
 Proc UpdateTabs
-	Case windowsSize% <= 0: return
+	Case SizeOf(windows%%[]) <= 0: return
 
-  Var width% = (%winright - %winleft) / windowsSize%
+  Var width% = (%winright - %winleft) / SizeOf(windows%%[])
   Var current# = New(TWINDOWINFO)
   Var currAddr%% = current#
 
   ' Remove old controls
-  WhileLoop 0, tabsSize% - 1
+  WhileLoop 0, SizeOf(tabs%%[]) - 1
     DestroyWindow(tabs%%[&loop])
   EndWhile
-  tabsSize% = 0
 
   ' Create new controls
-  WhileLoop  0, windowsSize% - 1
+  WhileLoop  0, SizeOf(windows%%[]) - 1
     currWInfo# = windowInfos#.Get(&loop)
     Tabs%%[&loop] = Create("BUTTON", %hWnd, currWInfo#.title$, Width%*&loop, 5, Width%, 25)
 		SetStyle Tabs%%[&loop],&BUTTON_STYLE
   EndWhile
 
-  SetSize Tabs%%[], tabsSize%
+  SetSize Tabs%%[], SizeOf(windows%%[])
   currWInfo# = currWInfoAddr%% ' Restore pointer
 EndProc
 
@@ -157,9 +158,24 @@ UpdateTabs
 
 SetTimer &UPDATE_INTERVAL
 While %key <> $1B
-  Case %wmtimer = 1: updateWindowList
-	UpdateTabs
-	WaitInput
+	GetMessage
+	If %wmTimer = 1
+		updateWindowList
+		UpdateTabs
+	EndIf
+
+	If %Message = ~WM_HOTKEY
+		~SetForegroundWindow(%hwnd)
+	EndIf
+
+	WhileLoop 0, SizeOf(tabs%%[])-1
+		If Clicked(tabs%%[&loop])
+			currWInfo# = windowInfos#.Get(&loop)
+			~SetForegroundWindow(currWInfo#.hwnd%%) 
+			currWInfo# = currWInfoAddr%%
+			Continue		
+		EndIf		
+	Wend
 Wend
 
 ' Clear resources
