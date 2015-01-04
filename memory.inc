@@ -1,6 +1,4 @@
 ' Based on memory.inc from XProfanX2 help
-
-$H H:\Devel\XProfanX2\Include\windows.ph
 Def &HEAP_ZERO_MEMORY 0x8
 Def CopyMemory(3) !"Kernel32","RtlMoveMemory"
 

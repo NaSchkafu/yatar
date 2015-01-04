@@ -1,7 +1,8 @@
-$H H:\Devel\XProfanX2\Include\shellapi.ph
-$H H:\Devel\XProfanX2\Include\Structs.ph
-$H H:\Devel\XProfanX2\Include\messages.ph
-$H H:\Devel\XProfanX2\Include\windows.ph
+' Headers shipped with XProfanX2
+$H E:\\Devel\XProfanX2\Include\shellapi.ph
+$H E:\\Devel\XProfanX2\Include\Structs.ph
+$H E:\\Devel\XProfanX2\Include\messages.ph
+$H E:\\Devel\XProfanX2\\INCLUDE\\Windows.ph
 
 $I Memory.Inc
 
@@ -10,65 +11,95 @@ Def &HEAP_ZERO_MEMORY 0x8
 Def &NULL 0x0
 Def &UPDATE_INTERVAL $1200
 Def &BUTTON_STYLE $5401A000
+Def &WM_MOUSELEAVE $2A3
+Def &WM_NCMOUSELEAVE $2A2
 
+Struct TWINDOWINFO = hWnd%%, title$(256), pos% ' Information about a tabble window
 Struct TAPPBARDATA = ~APPBARDATA
-Struct TWINDOWINFO = hWnd%%, title$(256), pos%
+Struct TSIZE = ~SIZE
+Struct TLOGFONT = ~LOGFONT
+Struct TTRACKMOUSEEVENT = ~TRACKMOUSEEVENT
 
 ' Global variables
 Declare windows%%[]' Array of relevant handles
 Declare windowInfos# ' Currently tabable windows
-Declare tabs%%[] ' Handles of tab buttons
+Declare tabsX%[] ' Starting x-coordinates of the switching tabs
+Declare trackEvent#
 Var currWInfo# = New(TWINDOWINFO) ' Pointer to a (temporary) working instance of TWINDOWINFO
 Var currWInfoAddr%% = currWInfo#
+Var switchMode% = 0 ' Switch mode
+Var hoveredIdx% = -1 ' Currently hovered tab
 
+' Configuration
+Declare tabFg%,tabHoverFg%
+
+' Prepare variables
 windowInfos# = New(Vector, 10, SizeOf(TWINDOWINFO))
+Dim trackEvent#, TTRACKMOUSEEVENT
+
 
 ' Some init stuff
 Proc InitApp
+	WindowStyle $458
+	Window 0,0 - 0,0
+	' GDI Setup
 	UseFont "MS Sans Serif",13,0,0,0,0
 	SetDialogFont 1
-
+	TextColor RGB(0, 255, 0), -1
+	tabFg% = RGB(0,255,0)
+	tabHoverFg% = RGB(255,255,255)
+	UsePen 0,1,tabFg%
+	' Hotkey
 	~RegisterHotkey(0, 1, ~MOD_WIN, $4B)
-  MessageBox(WinError$(%winerror), "",0)
-	UserMessages ~WM_HOTKEY
+	' Trackevent structure
+	trackEvent#.cbSize& = SizeOf(trackEvent#)
+	trackEvent#.dwFlags& = ~TME_LEAVE
+	trackEvent#.hwndTrack& = %hwnd
+	trackEvent#.dwHoverTime& = 0
 EndProc
 
 ' Create main window and register as appbar
 Proc CreateAppBar
-  Declare left&, top&, right&, bottom&
-  left& = 0
-  top& = 0
-  right& = %maxx
-  bottom& = 32
+	Declare left&, top&, right&, bottom&
+	Declare appData#, result%, logFont#
 
-  Declare appData#, result%
-  WindowStyle $458
-  Window 0,0 - 0,0
-  Dim appData#, TAPPBARDATA
-  appData#.cbSize& = SizeOf(appData#)
-  appData#.hWnd& = %hwnd
-  appData#.uCallbackMessage& = &CB_MSG_ID
-  result% = ~SHAppBarMessage(~ABM_NEW, appData#)
-  If result% = 0
-    MessageBox("Could not register window as appbar.", "Appbar register failed", ~MB_ICONSTOP)
-    Dispose appData#
-    End 1
-  EndIf
-  ' Query position
-  Long appData#,16 = left& 'left
-  Long appData#,20 = top& 'top
-  Long appData#,24 = right& 'right
-  Long appData#,28 = bottom& 'bottom
-  appData#.uEdge& = ~ABE_TOP
-  ~SHAppBarMessage(~ABM_QUERYPOS, appData#)
-  ~SHAppBarMessage(~ABM_SETPOS, appData#)
-  left& = Long(appData#, 16)
-  top& = Long(appData#, 20)
-  right& = Long(appData#, 24)
-  bottom& = Long(appData#, 28)
-  Window left&, top& - right& - left&, bottom&
-  Cls 0
-  Dispose appData#
+	Dim logFont#, TLOGFONT
+	If ~GetObject(%font, SizeOf(logFont#), logFont#) = 0
+   		MessageBox("Could not retrieve metrics of the used font.\nError: " + WinError$(%winError), "Internal error", ~MB_ICONSTOP)
+		Dispose logFont#
+		End 1
+	EndIf
+	left& = 0
+	top& = 0
+	right& = %maxx
+	bottom& = logFont#.lfHeight& + 2
+	Dispose logFont#
+
+	Dim appData#, TAPPBARDATA
+	appData#.cbSize& = SizeOf(appData#)
+	appData#.hWnd& = %hwnd
+	appData#.uCallbackMessage& = &CB_MSG_ID
+	result% = ~SHAppBarMessage(~ABM_NEW, appData#)
+	If result% = 0
+    	MessageBox("Could not register window as appbar.", "Appbar register failed", ~MB_ICONSTOP)
+    	Dispose appData#
+    	End 1
+  	EndIf
+  	' Query position
+	Long appData#,16 = left& 'left
+	Long appData#,20 = top& 'top
+	Long appData#,24 = right& 'right
+	Long appData#,28 = bottom& 'bottom
+	appData#.uEdge& = ~ABE_TOP
+	~SHAppBarMessage(~ABM_QUERYPOS, appData#)
+	~SHAppBarMessage(~ABM_SETPOS, appData#)
+	left& = Long(appData#, 16)
+	top& = Long(appData#, 20)
+	right& = Long(appData#, 24)
+	bottom& = Long(appData#, 28)
+	Window left&, top& - right& - left&, bottom&
+	Cls 0
+	Dispose appData#
 EndProc
 
 ' Determines whether a window is shown in the Alt+Tab Selection
@@ -78,11 +109,10 @@ Proc IsTabbableWindow
   If ~IsWindowVisible(hwnd%%) <> 0
     Declare hwndWalk%%, hwndTry%%
     hwndWalk%% = ~GetAncestor(hwnd%%, ~GA_ROOTOWNER)
-
     hwndTry%% = ~GetLastActivePopup(hwndWalk%%)
     While hwndTry%% <> hwndWalk%%
       style& = ~GetWindowLong(hwndTry%%, ~GWL_EXSTYLE)
-      Case (~IsWindowVisible(hwndTry%%) And Not(style& & ~WS_EX_TOOLWINDOW)) Or (style& & ~WS_EX_APPWINDOW): BREAK
+      Case (~IsWindowVisible(hwndTry%%) And Not(style& & ~WS_EX_TOOLWINDOW)) Or (style& & ~WS_EX_APPWINDOW): Break
       hwndWalk%% = hwndTry%%
       hwndTry%% = ~GetLastActivePopup(hwndWalk%%)
     Wend
@@ -103,6 +133,7 @@ Proc EnumWindowsCb
 	Return 1
 EndProc
 
+' Update a window info structure
 Proc UpdateWindowInfo
   Parameters hInfo%%, hwnd%%
   Var w# = New(TWINDOWINFO)
@@ -118,65 +149,154 @@ EndProc
 
 ' Updates the window list
 Proc updateWindowList
-  Var i% = 0
+	Var i% = 0
+	SetSize windows%%[], 0
+	windowInfos#.Clear()
+	
+	~EnumWindows(ProcAddr("EnumWindowsCb", 2), 0)
 
-  SetSize windows%%[], 0
-  ~EnumWindows(ProcAddr("EnumWindowsCb", 2), 0)
-  WhileLoop 0,SizeOf(windows%%[])-1
-    UpdateWindowInfo(currWInfo#, Windows%%[&loop])
-    windowInfos#.Add(currWInfo#)
-  EndWhile
+	WhileLoop 0,SizeOf(windows%%[])-1
+		UpdateWindowInfo(currWInfo#, Windows%%[&loop])
+		windowInfos#.Add(currWInfo#)
+	EndWhile
 EndProc
 
+' Updates the window tabs
 Proc UpdateTabs
+	Declare maxWidth&, size#, title$, dotsWidth&, x%
+	Dim size#, TSIZE
 	Case SizeOf(windows%%[]) <= 0: return
+	
+	Var width% = (%winright - %winleft) / SizeOf(	windows%%[])
+	Var current# = New(TWINDOWINFO)
+	Var currAddr%% = current#
+	SetSize tabsX%[],SizeOf(windows%%[])+1
 
-  Var width% = (%winright - %winleft) / SizeOf(windows%%[])
-  Var current# = New(TWINDOWINFO)
-  Var currAddr%% = current#
+	title$ = "..."
+	If ~GetTextExtentPoint32(%hdc, Addr(title$), Len(title$), Size#) <> 0
+		dotsWidth& = size#.cx&
+	Else
+		MessageBox("Could not calculate text width. GetTextExentPoint32 failed!\n" + "Error: " + WinError$(%winError), "Internal error", ~MB_ICONSTOP)
+	EndIf
 
-  ' Remove old controls
-  WhileLoop 0, SizeOf(tabs%%[]) - 1
-    DestroyWindow(tabs%%[&loop])
-  EndWhile
+	WhileLoop  0, SizeOf(windows%%[]) - 1
+    	currWInfo# = windowInfos#.Get(&loop)
+		x% = %winLeft + Width%*&loop + If(&loop=0,0,1)
+		tabsX%[&loop] = x%
+		UsePen 0,1,If(hoveredIdx%=&loop,tabHoverFg%,tabFg%)
+		Rectangle x%,1+%winTop - (%winLeft+width%*(&loop+1)),%winBottom
+		title$ = currWInfo#.title$
+		Case switchMode% = 1: title$ = "[" + Str$(&loop) + "] " + title$
+		
+		If ~GetTextExtentExPoint(%hdc, addr(title$), Len(title$), width% - dotsWidth& - 5, Addr(maxWidth&), &NULL, size#) <> 0
+			If maxWidth& <> Len(title$)
+				title$ = Left$(title$, maxWidth&) + "..."
+			EndIf
+			DrawText 2 + %winleft + Width%*&loop, %wintop + 1,title$,0
+		Else
+			MessageBox("Could not calculate text width. GetTextExtentExPoint failed!\n" + "Error: " + WinError$(%winError), "Internal error", ~MB_ICONSTOP)
+			End 1
+		EndIf
+  	EndWhile
 
-  ' Create new controls
-  WhileLoop  0, SizeOf(windows%%[]) - 1
-    currWInfo# = windowInfos#.Get(&loop)
-    Tabs%%[&loop] = Create("BUTTON", %hWnd, currWInfo#.title$, Width%*&loop, 5, Width%, 25)
-		SetStyle Tabs%%[&loop],&BUTTON_STYLE
-  EndWhile
-
-  SetSize Tabs%%[], SizeOf(windows%%[])
-  currWInfo# = currWInfoAddr%% ' Restore pointer
+	tabsX%[SizeOf(windows%%[])] = %winRight
+  	currWInfo# = currWInfoAddr%% ' Restore pointer
+	Dispose size#
 EndProc
 
-CreateAppBar
+' Determines the index of the requested window from the pressed key (0-9)
+Proc idxFromKeycode
+	Parameters keyCode%
+	Var offset% = -1
+	If (keyCode% >= $30) And (KeyCode% <= $39)
+		offset% = $30
+	ElseIf (keyCode% >= $60) And (KeyCode% <= $69)
+		offset% = $60
+	EndIf
+
+	If Offset% <> -1
+		Return keyCode% - offset%
+	EndIf
+	Return -1
+EndProc
+
+' Activates the window with the given index
+Proc switchWindow
+	Parameters idx%
+	Var flag% = ~SW_SHOW
+	currWInfo# = windowInfos#.Get(idx%)
+	~SetForegroundWindow(currWInfo#.hwnd%%)
+	Case ~IsIconic(currWInfo#.hwnd%%): flag% = ~SW_RESTORE
+	~ShowWindow(currWINfo#.hwnd%%, flag%)
+	currWInfo# = currWInfoAddr%%
+EndProc
+
+Proc getMouseOverIdx
+	Var ret% = -1
+	WhileLoop 0,SizeOf(tabsX%[])-2 ' Last entry is end of tabbing area
+		Case (%mouseX >= tabsX%[&loop]) And (%mouseX <= tabsX%[&loop+1]): ret% = &loop
+	Wend
+	
+	Return ret%
+EndProc
+
+Proc MainLoop
+	Var idx% = 0 ' Temporary variable for indices
+	Var running% = 1 ' Main loop
+	Var trackingMode% = 0 ' used to determine if TrackMouseEvent needs to be called
+	Var switchIdx% = -1
+
+	SetTimer &UPDATE_INTERVAL
+  While running% = 1
+    GetMessage
+    If %wmTimer = 1
+      updateWindowList
+      UpdateTabs
+      trackingMode% = 0
+    EndIf
+    If %Message = ~WM_HOTKEY
+      ~SetForegroundWindow(%hwnd)
+      switchMode% = 1
+      UpdateTabs
+    ElseIf ((%Message = ~WM_KEYUP) And (&wParam = $1B)) Or (%Key = $1B)
+      running% = 0
+    ElseIf %Message = ~WM_LBUTTONDOWN
+    	switchIdx% = getMouseOverIdx()
+    ElseIf %Message = ~WM_MOUSEMOVE
+      Case trackingMode% = 0: trackingMode% = ~TrackMouseEvent(trackEvent#)
+      idx% = getMouseOverIdx()
+      if idx% <> hoveredIdx%
+        hoveredIdx% = idx%
+        UpdateTabs
+      EndIf
+    ElseIf (switchMode% = 1) And (switchIdx% = -1)
+      Case %Message = ~WM_KEYUP: switchIdx% = idxFromKeyCode(&wParam)
+      Case switchIdx% = -1: idx% = idxFromKeycode(%key)
+    EndIf   
+
+		If %Message = &WM_MOUSELEAVE
+    	trackingMode% = 0
+      If hoveredIdx% <> -1
+      	hoveredIdx% = -1
+        UpdateTabs
+			EndIf
+		EndIf
+		
+		If switchIdx% <> -1
+			switchWindow(switchIdx%)
+      switchMode% = 0
+      updateTabs
+			switchIdx% = -1
+    EndIf
+	
+	Wend
+EndProc
+
 InitApp
+CreateAppBar
 updateWindowList
 UpdateTabs
-
-SetTimer &UPDATE_INTERVAL
-While %key <> $1B
-	GetMessage
-	If %wmTimer = 1
-		updateWindowList
-		UpdateTabs
-	EndIf
-
-	If %Message = ~WM_HOTKEY
-		~SetForegroundWindow(%hwnd)
-	EndIf
-
-	WhileLoop 0, SizeOf(tabs%%[])-1
-		If Clicked(tabs%%[&loop])
-			currWInfo# = windowInfos#.Get(&loop)
-			~SetForegroundWindow(currWInfo#.hwnd%%) 
-			currWInfo# = currWInfoAddr%%
-			Continue		
-		EndIf		
-	Wend
-Wend
+MainLoop
 
 ' Clear resources
 KillTimer
@@ -184,4 +304,4 @@ windowInfos#.Free()
 Dispose windowInfos#
 currWInfo# = currWInfoAddr%%
 Dispose currWInfo#
-
+Dispose trackEvent#
